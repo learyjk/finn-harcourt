@@ -86,24 +86,31 @@ export default {
     //console.log({ XMLdata });
     const json = await parseStringPromise(XMLdata);
     let newListings = processJson(json.feed);
-    console.log(newListings[0]);
+    console.log(newListings);
     // const webflowJsonResponse = await addItemToWebflow(newListings[0]);
 
-    const url =
-      "https://api.webflow.com/collections/63d46d20fb349f0ee632f934/items";
-    const options = {
-      method: "POST",
-      headers: {
-        accept: "application/json",
-        "content-type": "application/json",
-        authorization: `Bearer ${env.WEBFLOW_API_KEY}`,
-      },
-      body: JSON.stringify({
-        fields: newListings[0],
-      }),
-    };
-    const webflowResponse = await fetch(url, options);
-    const result: any = await webflowResponse.json();
-    return new Response(JSON.stringify(result));
+    return new Response(JSON.stringify(newListings));
+
+    const jsons = await Promise.all(
+      newListings.map(async (listing) => {
+        const url =
+          "https://api.webflow.com/collections/63d46d20fb349f0ee632f934/items";
+        const options = {
+          method: "POST",
+          headers: {
+            accept: "application/json",
+            "content-type": "application/json",
+            authorization: `Bearer ${env.WEBFLOW_API_KEY}`,
+          },
+          body: JSON.stringify({
+            fields: listing,
+          }),
+        };
+        const resp = await fetch(url, options);
+        const data = await resp.json();
+      })
+    );
+
+    return new Response(JSON.stringify(jsons));
   },
 };
