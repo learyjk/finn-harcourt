@@ -2,3 +2,13 @@ name = "finn-harcourt"
 main = "src/index.ts"
 compatibility_date = "2023-01-27"
 node_compat = true
+
+[triggers]
+crons = ["0 * * * *"]
+
+[vars]
+
+
+
+
+

@@ -1,22 +1,90 @@
 import { parseStringPromise } from "xml2js";
 import { delay } from "./utils";
-import { ListingDetail, Listing, WebflowJsonToPost } from "./types";
+import {
+  ListingDetail,
+  Listing,
+  WebflowJsonToPost,
+  WebflowAgentsResponse,
+  urlObject,
+} from "./types";
 
 const STARTS_WITH = "FB";
 const START_PAGE = 0;
+const WEBFLOW_LIMIT = 100;
 
 export interface Env {
   WEBFLOW_API_KEY: string;
-  WEBFLOW_COLLECTION_ID: string;
+  WEBFLOW_LISTINGS_COLLECTION_ID: string;
+  WEBFLOW_AGENTS_COLLECTION_ID: string;
+}
+
+async function getListingNumbersFromWebflow(
+  env: Env,
+  itemNumbers: string[] = [],
+  offset: number = 0
+): Promise<any> {
+  const url = `https://api.webflow.com/collections/${env.WEBFLOW_LISTINGS_COLLECTION_ID}/items`;
+  const options = {
+    method: "GET",
+    headers: {
+      accept: "application/json",
+      authorization: `Bearer ${env.WEBFLOW_API_KEY}`,
+    },
+  };
+
+  try {
+    const response = await fetch(url, options);
+    const json: any = await response.json();
+    let numbers = json.items.map((item: any) => {
+      return item["listing-number"];
+    });
+    itemNumbers = [...itemNumbers, ...numbers];
+
+    if (json.count === WEBFLOW_LIMIT) {
+      return getListingNumbersFromWebflow(
+        env,
+        itemNumbers,
+        json.offset + WEBFLOW_LIMIT
+      );
+    }
+    return itemNumbers;
+  } catch (error) {
+    console.log("error: ", error);
+  }
 }
 
 async function getRssListings(pageIndex: number = 0) {
-  const url = `https://nz.harcourts.biz/Listing/Rss?pageindex=${pageIndex}&searchresultsperpage=thirty`;
+  const url = `https://nz.harcourts.co.nz/Listing/Rss?pageindex=${pageIndex}&searchresultsperpage=thirty`;
   const response = await fetch(url, {
     method: "GET",
   });
   const data = await response.text();
   return data;
+}
+
+async function getAllRssListingsByOuid(
+  pageIndex: number = 0,
+  ouid: number = 860,
+  listingNumbers: string[] = []
+): Promise<string[]> {
+  const url = `http://www.harcourts.co.nz/Listing/Rss?ouid=${ouid}&searchresultsperpage=thirty&pageIndex=${pageIndex}`;
+
+  const response = await fetch(url, {
+    method: "GET",
+  });
+
+  const XMLdata = await response.text();
+  const json = await parseStringPromise(XMLdata);
+
+  const listingNumbersFromThisPage = processRssJsonForListingNumbers(json.feed);
+  listingNumbers = [...listingNumbers, ...listingNumbersFromThisPage];
+
+  let totalCount = parseInt(json.feed.listings[0]["$"]["totalcount"], 10);
+  let pages = Math.floor(totalCount / 30);
+  if (pageIndex < pages) {
+    return getAllRssListingsByOuid(pageIndex + 1, ouid, listingNumbers);
+  }
+  return listingNumbers;
 }
 
 async function getListingDetailXML(listingNumber: string) {
@@ -53,30 +121,6 @@ function processJsonForFullListing(json: any): Listing[] {
   return newListings;
 }
 
-// async function addItemToWebflow(itemJson: any) {
-//   const url =
-//     "https://api.webflow.com/collections/63d46d20fb349f0ee632f934/items";
-//   const options = {
-//     method: "POST",
-//     headers: {
-//       accept: "application/json",
-//       "content-type": "application/json",
-//       authorization: `Bearer ${}`,
-//     },
-//     body: JSON.stringify({
-//       fields: itemJson,
-//     }),
-//   };
-
-//   try {
-//     const response = await fetch(url, options);
-//     const json = await response.json();
-//     return json;
-//   } catch (error) {
-//     console.log("error: ", error);
-//   }
-// }
-
 function processRssJsonForListingNumbers(json: any) {
   let listingNumbers: string[] = [];
 
@@ -90,26 +134,124 @@ function processRssJsonForListingNumbers(json: any) {
   return listingNumbers;
 }
 
-function processJsonForWebflow(
-  listingDetail: ListingDetail
-): WebflowJsonToPost {
+async function processJsonForWebflow(
+  listingDetail: ListingDetail,
+  env: Env
+): Promise<WebflowJsonToPost> {
+  const agentNames = listingDetail.ListingStaff![0].Staff!.map((staff) => {
+    return staff.DisplayName![0];
+  });
+  const agentIds = await findAgentIdsFromNames(agentNames, env);
+
+  const gallery: urlObject[] =
+    listingDetail
+      .Images![0].Image?.filter((imageObj) => {
+        return imageObj.IsFloorPlan![0] !== "True";
+      })
+      .map((imageObj) => {
+        return { url: imageObj.LargePhotoUrl![0] };
+      }) || [];
+
+  const floorPlans: urlObject[] =
+    listingDetail
+      .Images![0].Image?.filter((imageObj) => {
+        return imageObj.IsFloorPlan![0] !== "False";
+      })
+      .map((imageObj) => {
+        return { url: imageObj.LargePhotoUrl![0] };
+      }) || [];
+
+  const propertyAttributes =
+    listingDetail.AttributeData![0].Features![0].Feature?.map((feat) => {
+      return `${feat.Name}: ${feat.Value}`;
+    });
+
+  const url = getUrlForListing(listingDetail);
+
   return {
     fields: {
+      heading: listingDetail.InternetHeading![0],
+      name: listingDetail.StreetAddress
+        ? listingDetail.StreetAddress![0]
+        : "New Listing",
       "listing-number": listingDetail.ListingNumber![0],
-      bedrooms: listingDetail.Bedrooms![0],
-      image: { url: listingDetail.Images![0].Image![0].LargePhotoUrl![0] },
+      bedrooms: listingDetail.Bedrooms
+        ? parseInt(listingDetail.Bedrooms[0], 10)
+        : 0,
+      bathrooms: listingDetail.Bathrooms
+        ? parseInt(listingDetail.Bathrooms[0], 10)
+        : 0,
+      lounges: listingDetail.Lounges
+        ? parseInt(listingDetail.Lounges![0], 10)
+        : 0,
+      thumbnail: {
+        url: listingDetail.Images![0].Image![0].ThumbnailPhotoUrl![0],
+      },
+      gallery,
+      "floor-plans": floorPlans,
+      agents: agentIds || [],
+      "car-space": listingDetail.CarSpacesGarage
+        ? parseInt(listingDetail.CarSpacesGarage[0], 10)
+        : 0,
+      "display-price": listingDetail.DisplayPrice![0],
+      "property-type":
+        listingDetail.PropertyTypes![0].PropertyType![0].PropertyTypeName![0],
+      "listing-type-name": listingDetail.ListingTypeName![0],
+      "street-address": listingDetail.StreetAddress![0],
+      suburb: listingDetail.Suburb![0].replaceAll("-", " "),
+      state: listingDetail.State![0],
+      "listing-id": listingDetail.ListingID![0],
+      "video-link": listingDetail.VideoTourUrl
+        ? listingDetail.VideoTourUrl![0]
+        : "",
+      body: listingDetail.InternetBody![0],
+      "property-attributes": propertyAttributes?.join("\n") || "",
+      "harcourts-net-url": url,
       _archived: false,
       _draft: false,
-      name: "name here",
     },
   };
+}
+
+function getUrlForListing(listingDetail: ListingDetail) {
+  const base = "https://harcourts.net/nz/office/flat-bush/listing/";
+  const listingNumber = listingDetail.ListingNumber![0].toLowerCase();
+
+  return `${base}${listingNumber}`;
+}
+
+async function findAgentIdsFromNames(
+  agentNames: string[],
+  env: Env
+): Promise<string[] | undefined> {
+  const url = `https://api.webflow.com/collections/${env.WEBFLOW_AGENTS_COLLECTION_ID}/items`;
+  const options = {
+    method: "GET",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      authorization: `Bearer ${env.WEBFLOW_API_KEY}`,
+    },
+  };
+  const resp = await fetch(url, options);
+  const data: WebflowAgentsResponse = await resp.json();
+
+  const matchingAgentsIds = data.items
+    .filter((agentItem) => {
+      return agentNames.includes(agentItem.name);
+    })
+    .map((matchingAgent) => {
+      return matchingAgent._id;
+    });
+
+  return matchingAgentsIds;
 }
 
 async function postListingDetailToWebflow(
   jsonToPost: WebflowJsonToPost,
   env: Env
 ) {
-  const url = `https://api.webflow.com/collections/${env.WEBFLOW_COLLECTION_ID}/items`;
+  const url = `https://api.webflow.com/collections/${env.WEBFLOW_LISTINGS_COLLECTION_ID}/items`;
   const options = {
     method: "POST",
     headers: {
@@ -143,7 +285,7 @@ export default {
         //await delay(1);
       }
       return new Response(JSON.stringify(allListingNumbers));
-    } else if (url.pathname === "/getListingDetail") {
+    } else if (url.pathname === "/addListingToWebflowByListingNumber") {
       let listingNumber = url.searchParams.get("listingNumber");
       if (!listingNumber) {
         return new Response(
@@ -155,7 +297,41 @@ export default {
         return new Response("Error with this listingNumber");
       }
       const json = await parseStringPromise(XMLdata);
-      const jsonPreppedForWebflow = processJsonForWebflow(json.Listing);
+      const jsonPreppedForWebflow = await processJsonForWebflow(
+        json.Listing,
+        env
+      );
+      const webflowResponseData = await postListingDetailToWebflow(
+        jsonPreppedForWebflow,
+        env
+      );
+      return new Response(JSON.stringify(webflowResponseData));
+    } else if (url.pathname === "/getAllListingsInWebflow") {
+      const listingNumbers: string[] = await getListingNumbersFromWebflow(env);
+      return new Response(JSON.stringify(listingNumbers));
+    } else if (url.pathname === "/getAllListingsFromRssByOuid") {
+      const listingsForPage = await getAllRssListingsByOuid(0, 860);
+      return new Response(JSON.stringify(listingsForPage));
+    } else if (url.pathname === "/addNextListingToWebflow") {
+      console.log("addNextListingToWebflow");
+      const listingNumbersInWebflow = await getListingNumbersFromWebflow(env);
+      const listingNumbersFromAPI = await getAllRssListingsByOuid(0, 860);
+      console.log("lisitng Numbers in Webflow: ", listingNumbersInWebflow);
+      console.log("from API: ", listingNumbersFromAPI);
+
+      const listingsNotInWebflow = listingNumbersFromAPI.filter((listing) => {
+        return !listingNumbersInWebflow.includes(listing);
+      });
+
+      const XMLdata = await getListingDetailXML(listingsNotInWebflow[0]);
+      if (!XMLdata || XMLdata.indexOf("<!DOCTYPE html>") !== -1) {
+        return new Response("Error with this listingNumber");
+      }
+      const json = await parseStringPromise(XMLdata);
+      const jsonPreppedForWebflow = await processJsonForWebflow(
+        json.Listing,
+        env
+      );
       const webflowResponseData = await postListingDetailToWebflow(
         jsonPreppedForWebflow,
         env
@@ -164,34 +340,33 @@ export default {
     } else {
       return new Response("nothing to return");
     }
-    //   const XMLdata = await getListings();
-    //   //console.log({ XMLdata });
-    //   const json = await parseStringPromise(XMLdata);
-    //   let newListings = processJson(json.feed);
-    //   // const webflowJsonResponse = await addItemToWebflow(newListings[0]);
-    //   return new Response(JSON.stringify(json.feed));
+  },
 
-    //   const jsons = await Promise.all(
-    //     newListings.map(async (listing) => {
-    //       const url =
-    //         "https://api.webflow.com/collections/63d46d20fb349f0ee632f934/items";
-    //       const options = {
-    //         method: "POST",
-    //         headers: {
-    //           accept: "application/json",
-    //           "content-type": "application/json",
-    //           authorization: `Bearer ${env.WEBFLOW_API_KEY}`,
-    //         },
-    //         body: JSON.stringify({
-    //           fields: listing,
-    //         }),
-    //       };
-    //       const resp = await fetch(url, options);
-    //       const data = await resp.json();
-    //     })
-    //   );
+  async scheduled(event, env, ctx) {
+    console.log("running cron");
+    // Write code for updating your API
+    // Every minute
+    const listingNumbersInWebflow = await getListingNumbersFromWebflow(env);
+    const listingNumbersFromAPI = await getAllRssListingsByOuid(0, 860);
 
-    //   return new Response(JSON.stringify(jsons));
-    // }
+    const listingsNotInWebflow = listingNumbersFromAPI.filter((listing) => {
+      return !listingNumbersInWebflow.includes(listing);
+    });
+
+    const XMLdata = await getListingDetailXML(listingsNotInWebflow[0]);
+    if (!XMLdata || XMLdata.indexOf("<!DOCTYPE html>") !== -1) {
+      return new Response("Error with this listingNumber");
+    }
+    const json = await parseStringPromise(XMLdata);
+    const jsonPreppedForWebflow = await processJsonForWebflow(
+      json.Listing,
+      env
+    );
+    const webflowResponseData = await postListingDetailToWebflow(
+      jsonPreppedForWebflow,
+      env
+    );
+
+    console.log("cron processed");
   },
 };

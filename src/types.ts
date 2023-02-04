@@ -6,17 +6,72 @@ export type Listing = {
   _draft: boolean;
 };
 
+export type urlObject = {
+  url: string;
+};
+
 export type WebflowJsonToPost = {
   fields: {
     _archived: boolean;
     _draft: boolean;
-    "listing-number": string;
-    bedrooms: string;
+    heading: string;
+
+    bedrooms: number;
     name: string;
-    image: {
-      url: string;
-    };
+    "listing-number": string;
+    thumbnail: urlObject;
+    agents: string[];
+    bathrooms: number;
+    body?: string;
+    "car-space"?: number;
+    "display-price"?: string;
+    "floor-plans": urlObject[];
+    gallery: urlObject[];
+    "harcourts-net-url"?: string;
+    "listing-id"?: string;
+    "listing-type-name"?: string;
+    lounges?: number;
+    "property-attributes"?: string;
+    "property-type"?: string;
+    state?: string;
+    "street-address"?: string;
+    suburb?: string;
+    "video-link"?: string;
   };
+};
+
+export type WebflowAgentsResponse = {
+  items: [
+    {
+      _archived: boolean;
+      _draft: boolean;
+      "email-address": string;
+      "display-name": string;
+      "last-name": string;
+      "job-title": string;
+      "first-name": string;
+      name: string;
+      "mission-statement": string;
+      slug: string;
+      "agent-photo": {
+        fileId: string;
+        url: string;
+        alt: string | null;
+      };
+      "updated-on": string;
+      "updated-by": string;
+      "created-on": string;
+      "created-by": string;
+      "published-on": string | null;
+      "published-by": string | null;
+      _cid: string;
+      _id: string;
+    }
+  ];
+  count: number;
+  limit: number;
+  offset: number;
+  total: number;
 };
 
 export interface ListingDetail {
@@ -24,6 +79,8 @@ export interface ListingDetail {
   Status?: string[] | null;
   Bathrooms?: string[] | null;
   Bedrooms?: string[] | null;
+  Lounges?: string[] | null;
+  Toilets?: string[] | null;
   CarSpacesGarage?: string[] | null;
   CreateDateTime?: string[] | null;
   DisplayPrice?: string[] | null;
@@ -46,6 +103,7 @@ export interface ListingDetail {
   Region?: string[] | null;
   State?: string[] | null;
   PostCode?: string[] | null;
+  VideoTourUrl?: string[] | null;
   AttributeData?: AttributeDataEntity[] | null;
 }
 export interface ImagesEntity {
