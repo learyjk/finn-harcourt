@@ -353,6 +353,11 @@ export default {
       return !listingNumbersInWebflow.includes(listing);
     });
 
+    if (listingsNotInWebflow.length === 0) {
+      console.log("no new listings");
+      return new Response("No new listings");
+    }
+
     const XMLdata = await getListingDetailXML(listingsNotInWebflow[0]);
     if (!XMLdata || XMLdata.indexOf("<!DOCTYPE html>") !== -1) {
       return new Response("Error with this listingNumber");
