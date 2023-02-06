@@ -1,5 +1,8 @@
 import { parseStringPromise } from "xml2js";
-import { delay } from "./utils";
+import { load } from "cheerio";
+import { get } from "https";
+import { delay, imageIsLessThanSize } from "./utils";
+
 import {
   ListingDetail,
   Listing,
@@ -11,6 +14,7 @@ import {
 const STARTS_WITH = "FP";
 const START_PAGE = 73;
 const WEBFLOW_LIMIT = 100;
+const FOUR_MB = 4 * 1000 * 1000;
 
 export interface Env {
   WEBFLOW_API_KEY: string;
@@ -18,12 +22,34 @@ export interface Env {
   WEBFLOW_AGENTS_COLLECTION_ID: string;
 }
 
+function formatBodyTextToHTML(text: string) {
+  if (text === "") return "";
+  const $ = load("<body></body>");
+
+  const lines = text.split("\n");
+  let listStart = false;
+  lines.forEach((line) => {
+    if (line.startsWith("-")) {
+      if (!listStart) {
+        $("body").append("<ul></ul>");
+        listStart = true;
+      }
+      $("ul").append(`<li>${line.substr(1)}</li>`);
+    } else {
+      $("body").append(`<p>${line}</p>`);
+    }
+  });
+
+  const html = $("body").html();
+  return html;
+}
+
 async function getListingNumbersFromWebflow(
   env: Env,
   itemNumbers: string[] = [],
   offset: number = 0
 ): Promise<any> {
-  const url = `https://api.webflow.com/collections/${env.WEBFLOW_LISTINGS_COLLECTION_ID}/items`;
+  const url = `https://api.webflow.com/collections/${env.WEBFLOW_LISTINGS_COLLECTION_ID}/items?offset=${offset}`;
   const options = {
     method: "GET",
     headers: {
@@ -161,10 +187,20 @@ async function processJsonForWebflow(
         return { url: imageObj.LargePhotoUrl![0] };
       }) || [];
 
+  gallery.filter((image) => {
+    return imageIsLessThanSize(image.url, FOUR_MB);
+  });
+
+  floorPlans.filter((image) => {
+    return imageIsLessThanSize(image.url, FOUR_MB);
+  });
+
   const propertyAttributes =
     listingDetail.AttributeData![0].Features![0].Feature?.map((feat) => {
       return `${feat.Name}: ${feat.Value}`;
     });
+
+  const body = formatBodyTextToHTML(listingDetail.InternetBody![0]);
 
   const url = getUrlForListing(listingDetail);
 
@@ -205,7 +241,7 @@ async function processJsonForWebflow(
       "video-link": listingDetail.VideoTourUrl
         ? listingDetail.VideoTourUrl![0]
         : "",
-      body: listingDetail.InternetBody![0],
+      body: body || "",
       "property-attributes": propertyAttributes?.join("\n") || "",
       "harcourts-net-url": url,
       _archived: false,
@@ -307,7 +343,7 @@ export default {
         jsonPreppedForWebflow,
         env
       );
-      return new Response(JSON.stringify(webflowResponseData));
+      return new Response(JSON.stringify(jsonPreppedForWebflow));
     } else if (url.pathname === "/getAllListingsInWebflow") {
       const listingNumbers: string[] = await getListingNumbersFromWebflow(env);
       return new Response(JSON.stringify(listingNumbers));
@@ -352,27 +388,62 @@ export default {
         jsonPreppedForWebflow,
         env
       );
+      return new Response(JSON.stringify(webflowResponseData));
+    } else if (url.pathname === "/getWebflowJsonByListingNumber") {
+      let listingNumber = url.searchParams.get("listingNumber");
+      if (!listingNumber) {
+        return new Response(
+          "Please specify a listingNumber as a url query parameter"
+        );
+      }
+      const XMLdata = await getListingDetailXML(listingNumber);
+      if (!XMLdata || XMLdata.indexOf("<!DOCTYPE html>") !== -1) {
+        return new Response("Error with this listingNumber");
+      }
+      const json = await parseStringPromise(XMLdata);
+      const jsonPreppedForWebflow = await processJsonForWebflow(
+        json.Listing,
+        env
+      );
       return new Response(JSON.stringify(jsonPreppedForWebflow));
+    } else if (url.pathname === "/testImageSize") {
+      let imageUrl = url.searchParams.get("imageUrl");
+      if (!imageUrl) {
+        return new Response("Please provide an imageUrl in query params");
+      }
+      let result = await imageIsLessThanSize(imageUrl, FOUR_MB);
+      return new Response(JSON.stringify(result));
     } else {
       return new Response("nothing to return");
     }
   },
 
   async scheduled(event, env, ctx) {
-    console.log("running cron");
+    console.log("running cron to add an item to webflow");
     // Write code for updating your API
     // Every minute
     const listingNumbersInWebflow = await getListingNumbersFromWebflow(env);
-    const listingNumbersFromAPI = await getAllRssListingsByOuid(0, 860);
+    const listingNumbersFromAPI860 = await getAllRssListingsByOuid(0, 860);
+    const listingNumbersFromAPI863 = await getAllRssListingsByOuid(0, 863);
+
+    const listingNumbersFromAPI = [
+      ...listingNumbersFromAPI860,
+      ...listingNumbersFromAPI863,
+    ];
+    // console.log("lisitng Numbers in Webflow: ", listingNumbersInWebflow);
+    // console.log("from API: ", listingNumbersFromAPI);
 
     const listingsNotInWebflow = listingNumbersFromAPI.filter((listing) => {
       return !listingNumbersInWebflow.includes(listing);
     });
 
+    console.log("listings not in Webflow yet: ", listingsNotInWebflow);
+
     if (listingsNotInWebflow.length === 0) {
-      console.log("no new listings");
-      return new Response("No new listings");
+      return new Response("No new listings found to add to Webflow");
     }
+
+    console.log(`adding listingNumber ${listingsNotInWebflow[0]} to webflow`);
 
     const XMLdata = await getListingDetailXML(listingsNotInWebflow[0]);
     if (!XMLdata || XMLdata.indexOf("<!DOCTYPE html>") !== -1) {
@@ -387,7 +458,7 @@ export default {
       jsonPreppedForWebflow,
       env
     );
-
     console.log("cron processed");
+    return new Response(JSON.stringify(jsonPreppedForWebflow));
   },
 };

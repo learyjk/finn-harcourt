@@ -13,7 +13,9 @@
     "deploy": "wrangler publish"
   },
   "dependencies": {
+    "cheerio": "^1.0.0-rc.12",
     "fs": "^0.0.1-security",
+    "https": "^1.0.0",
     "xml2js": "^0.4.23"
   }
 }
