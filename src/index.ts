@@ -187,13 +187,13 @@ async function processJsonForWebflow(
         return { url: imageObj.LargePhotoUrl![0] };
       }) || [];
 
-  gallery.filter((image) => {
-    return imageIsLessThanSize(image.url, FOUR_MB);
-  });
+  // gallery.filter((image) => {
+  //   return imageIsLessThanSize(image.url, FOUR_MB);
+  // });
 
-  floorPlans.filter((image) => {
-    return imageIsLessThanSize(image.url, FOUR_MB);
-  });
+  // floorPlans.filter((image) => {
+  //   return imageIsLessThanSize(image.url, FOUR_MB);
+  // });
 
   const propertyAttributes =
     listingDetail.AttributeData![0].Features![0].Feature?.map((feat) => {
@@ -459,6 +459,6 @@ export default {
       env
     );
     console.log("cron processed");
-    return new Response(JSON.stringify(jsonPreppedForWebflow));
+    return new Response(JSON.stringify(webflowResponseData));
   },
 };
