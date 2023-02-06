@@ -8,8 +8,8 @@ import {
   urlObject,
 } from "./types";
 
-const STARTS_WITH = "FB";
-const START_PAGE = 0;
+const STARTS_WITH = "FP";
+const START_PAGE = 73;
 const WEBFLOW_LIMIT = 100;
 
 export interface Env {
@@ -54,7 +54,7 @@ async function getListingNumbersFromWebflow(
 }
 
 async function getRssListings(pageIndex: number = 0) {
-  const url = `https://nz.harcourts.co.nz/Listing/Rss?pageindex=${pageIndex}&searchresultsperpage=thirty`;
+  const url = `http://www.harcourts.co.nz/Listing/Rss?searchresultsperpage=thirty&pageIndex=${pageIndex}`;
   const response = await fetch(url, {
     method: "GET",
   });
@@ -127,7 +127,7 @@ function processRssJsonForListingNumbers(json: any) {
   let entries = json.entry;
   for (let entry of entries) {
     const listingNumber = entry.listing[0]["$"]["listingNumber"];
-    if (listingNumber.startsWith(STARTS_WITH)) {
+    if (listingNumber.startsWith("FB") || listingNumber.startsWith("FPM")) {
       listingNumbers.push(listingNumber);
     }
   }
@@ -171,9 +171,10 @@ async function processJsonForWebflow(
   return {
     fields: {
       heading: listingDetail.InternetHeading![0],
-      name: listingDetail.StreetAddress
-        ? listingDetail.StreetAddress![0]
-        : "New Listing",
+      name:
+        listingDetail.StreetAddress![0] !== ""
+          ? listingDetail.StreetAddress![0]
+          : listingDetail.InternetHeading![0],
       "listing-number": listingDetail.ListingNumber![0],
       bedrooms: listingDetail.Bedrooms
         ? parseInt(listingDetail.Bedrooms[0], 10)
@@ -282,6 +283,7 @@ export default {
         const json = await parseStringPromise(XMLdata);
         const listingNumbers = processRssJsonForListingNumbers(json.feed);
         allListingNumbers = [...allListingNumbers, ...listingNumbers];
+        console.log(allListingNumbers);
         //await delay(1);
       }
       return new Response(JSON.stringify(allListingNumbers));
@@ -310,18 +312,32 @@ export default {
       const listingNumbers: string[] = await getListingNumbersFromWebflow(env);
       return new Response(JSON.stringify(listingNumbers));
     } else if (url.pathname === "/getAllListingsFromRssByOuid") {
-      const listingsForPage = await getAllRssListingsByOuid(0, 860);
+      const listingsForPage = await getAllRssListingsByOuid(0, 863);
       return new Response(JSON.stringify(listingsForPage));
     } else if (url.pathname === "/addNextListingToWebflow") {
       console.log("addNextListingToWebflow");
       const listingNumbersInWebflow = await getListingNumbersFromWebflow(env);
-      const listingNumbersFromAPI = await getAllRssListingsByOuid(0, 860);
-      console.log("lisitng Numbers in Webflow: ", listingNumbersInWebflow);
-      console.log("from API: ", listingNumbersFromAPI);
+      const listingNumbersFromAPI860 = await getAllRssListingsByOuid(0, 860);
+      const listingNumbersFromAPI863 = await getAllRssListingsByOuid(0, 863);
+
+      const listingNumbersFromAPI = [
+        ...listingNumbersFromAPI860,
+        ...listingNumbersFromAPI863,
+      ];
+      // console.log("lisitng Numbers in Webflow: ", listingNumbersInWebflow);
+      // console.log("from API: ", listingNumbersFromAPI);
 
       const listingsNotInWebflow = listingNumbersFromAPI.filter((listing) => {
         return !listingNumbersInWebflow.includes(listing);
       });
+
+      console.log("listings not in Webflow yet: ", listingsNotInWebflow);
+
+      if (listingsNotInWebflow.length === 0) {
+        return new Response("No new listings found to add to Webflow");
+      }
+
+      console.log(`adding listingNumber ${listingsNotInWebflow[0]} to webflow`);
 
       const XMLdata = await getListingDetailXML(listingsNotInWebflow[0]);
       if (!XMLdata || XMLdata.indexOf("<!DOCTYPE html>") !== -1) {
@@ -336,7 +352,7 @@ export default {
         jsonPreppedForWebflow,
         env
       );
-      return new Response(JSON.stringify(webflowResponseData));
+      return new Response(JSON.stringify(jsonPreppedForWebflow));
     } else {
       return new Response("nothing to return");
     }
