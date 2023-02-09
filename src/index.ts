@@ -47,7 +47,8 @@ function formatBodyTextToHTML(text: string) {
 async function getListingNumbersFromWebflow(
   env: Env,
   itemNumbers: string[] = [],
-  offset: number = 0
+  offset: number = 0,
+  filterForCorruptGallery: boolean = false
 ): Promise<any> {
   const url = `https://api.webflow.com/collections/${env.WEBFLOW_LISTINGS_COLLECTION_ID}/items?offset=${offset}`;
   const options = {
@@ -60,7 +61,14 @@ async function getListingNumbersFromWebflow(
 
   try {
     const response = await fetch(url, options);
-    const json: any = await response.json();
+    let json: any = await response.json();
+
+    if (filterForCorruptGallery) {
+      json.items = json.items.filter((item: any) => {
+        return item?.gallery === undefined;
+      });
+    }
+
     let numbers = json.items.map((item: any) => {
       return item["listing-number"];
     });
@@ -70,7 +78,8 @@ async function getListingNumbersFromWebflow(
       return getListingNumbersFromWebflow(
         env,
         itemNumbers,
-        json.offset + WEBFLOW_LIMIT
+        json.offset + WEBFLOW_LIMIT,
+        filterForCorruptGallery
       );
     }
     return itemNumbers;
@@ -169,15 +178,6 @@ async function processJsonForWebflow(
   });
   const agentIds = await findAgentIdsFromNames(agentNames, env);
 
-  const gallery: urlObject[] =
-    listingDetail
-      .Images![0].Image?.filter((imageObj) => {
-        return imageObj.IsFloorPlan![0] !== "True";
-      })
-      .map((imageObj) => {
-        return { url: imageObj.LargePhotoUrl![0] };
-      }) || [];
-
   const floorPlans: urlObject[] =
     listingDetail
       .Images![0].Image?.filter((imageObj) => {
@@ -186,6 +186,24 @@ async function processJsonForWebflow(
       .map((imageObj) => {
         return { url: imageObj.LargePhotoUrl![0] };
       }) || [];
+
+  const imagesWithoutFloorPlans = listingDetail.Images![0].Image?.filter(
+    (imageObj) => {
+      return imageObj.IsFloorPlan![0] !== "True";
+    }
+  );
+
+  const allGalleryImages: urlObject[] =
+    imagesWithoutFloorPlans!.map((imageObj) => {
+      return { url: imageObj.LargePhotoUrl![0] };
+    }) || [];
+
+  console.log("# in allGalleryImages: ", allGalleryImages.length);
+
+  const galleryOne = allGalleryImages.slice(0, 25);
+  const galleryTwo = allGalleryImages.slice(25);
+  console.log("# in galleryOne: ", galleryOne.length);
+  console.log("# in galleryTwo: ", galleryTwo.length);
 
   // gallery.filter((image) => {
   //   return imageIsLessThanSize(image.url, FOUR_MB);
@@ -197,7 +215,7 @@ async function processJsonForWebflow(
 
   const propertyAttributes =
     listingDetail.AttributeData![0].Features![0].Feature?.map((feat) => {
-      return `${feat.Name}: ${feat.Value}`;
+      return `<p>${feat.Name}: ${feat.Value}</p>`;
     });
 
   const body = formatBodyTextToHTML(listingDetail.InternetBody![0]);
@@ -224,7 +242,8 @@ async function processJsonForWebflow(
       thumbnail: {
         url: listingDetail.Images![0].Image![0].ThumbnailPhotoUrl![0],
       },
-      gallery,
+      gallery: galleryOne,
+      "gallery-2": galleryTwo,
       "floor-plans": floorPlans,
       agents: agentIds || [],
       "car-space": listingDetail.CarSpacesGarage
@@ -413,6 +432,14 @@ export default {
       }
       let result = await imageIsLessThanSize(imageUrl, FOUR_MB);
       return new Response(JSON.stringify(result));
+    } else if (url.pathname === "/getListingNumbersWithCorruptGallery") {
+      let listingNumbers: string[] = await getListingNumbersFromWebflow(
+        env,
+        [],
+        0,
+        true
+      );
+      return new Response(JSON.stringify(listingNumbers));
     } else {
       return new Response("nothing to return");
     }

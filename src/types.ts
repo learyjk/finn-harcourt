@@ -15,7 +15,6 @@ export type WebflowJsonToPost = {
     _archived: boolean;
     _draft: boolean;
     heading: string;
-
     bedrooms: number;
     name: string;
     "listing-number": string;
@@ -27,6 +26,7 @@ export type WebflowJsonToPost = {
     "display-price"?: string;
     "floor-plans": urlObject[];
     gallery: urlObject[];
+    "gallery-2": urlObject[];
     "harcourts-net-url"?: string;
     "listing-id"?: string;
     "listing-type-name"?: string;
