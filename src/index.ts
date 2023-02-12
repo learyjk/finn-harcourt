@@ -48,7 +48,8 @@ async function getListingNumbersFromWebflow(
   env: Env,
   itemNumbers: string[] = [],
   offset: number = 0,
-  filterForCorruptGallery: boolean = false
+  filterForCorruptGallery: boolean = false,
+  filterForNoCreatedDate: boolean = false
 ): Promise<any> {
   const url = `https://api.webflow.com/collections/${env.WEBFLOW_LISTINGS_COLLECTION_ID}/items?offset=${offset}`;
   const options = {
@@ -69,6 +70,12 @@ async function getListingNumbersFromWebflow(
       });
     }
 
+    if (filterForNoCreatedDate) {
+      json.items = json.items.filter((item: any) => {
+        return item["date-created"] === undefined;
+      });
+    }
+
     let numbers = json.items.map((item: any) => {
       return item["listing-number"];
     });
@@ -82,10 +89,75 @@ async function getListingNumbersFromWebflow(
         filterForCorruptGallery
       );
     }
+
     return itemNumbers;
   } catch (error) {
     console.log("error: ", error);
   }
+}
+
+async function getWebflowItemByListingNumber(
+  listingNumber: string,
+  env: Env,
+  offset: number = 0
+): Promise<any> {
+  const url = `https://api.webflow.com/collections/${env.WEBFLOW_LISTINGS_COLLECTION_ID}/items?offset=${offset}`;
+  const options = {
+    method: "GET",
+    headers: {
+      accept: "application/json",
+      authorization: `Bearer ${env.WEBFLOW_API_KEY}`,
+    },
+  };
+
+  try {
+    const response = await fetch(url, options);
+    let json: any = await response.json();
+
+    let listing = json.items.find((item: any) => {
+      return item["listing-number"] === listingNumber;
+    });
+
+    if (listing === null && json.count === WEBFLOW_LIMIT) {
+      return getWebflowItemByListingNumber(
+        listingNumber,
+        env,
+        json.offset + WEBFLOW_LIMIT
+      );
+    } else {
+      return listing;
+    }
+  } catch (error) {
+    console.log("error: ", error);
+  }
+}
+
+async function patchWebflowItemField(
+  env: Env,
+  webflowId: string,
+  fieldName: string,
+  fieldData: Date
+) {
+  const url = `https://api.webflow.com/collections/${env.WEBFLOW_LISTINGS_COLLECTION_ID}/items/${webflowId}`;
+
+  let body = {
+    fields: {
+      [fieldName]: fieldData,
+    },
+  };
+
+  const options = {
+    method: "PATCH",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      authorization: `Bearer ${env.WEBFLOW_API_KEY}`,
+    },
+    body: JSON.stringify(body),
+  };
+  const resp = await fetch(url, options);
+  const data = await resp.json();
+  return data;
 }
 
 async function getRssListings(pageIndex: number = 0) {
@@ -242,6 +314,7 @@ async function processJsonForWebflow(
       thumbnail: {
         url: listingDetail.Images![0].Image![0].ThumbnailPhotoUrl![0],
       },
+      "date-created": new Date(listingDetail.CreateDateTime![0]),
       gallery: galleryOne,
       "gallery-2": galleryTwo,
       "floor-plans": floorPlans,
@@ -432,6 +505,49 @@ export default {
       }
       let result = await imageIsLessThanSize(imageUrl, FOUR_MB);
       return new Response(JSON.stringify(result));
+    } else if (url.pathname === "/updateDateForNextItem") {
+      const OFFSET = 0;
+
+      const listingNumbersWithoutDate: string[] =
+        await getListingNumbersFromWebflow(env, [], OFFSET, false, true);
+      if (listingNumbersWithoutDate.length === 0) {
+        return new Response("No listing numebrs found without date!");
+      }
+
+      let listingNumberToUpdate = listingNumbersWithoutDate[0];
+
+      console.log(`updating date for: `, listingNumberToUpdate);
+
+      // get API data
+      const XMLdata = await getListingDetailXML(listingNumberToUpdate);
+      if (!XMLdata || XMLdata.indexOf("<!DOCTYPE html>") !== -1) {
+        return new Response(
+          `Error with this listingNumber: ${listingNumberToUpdate}`
+        );
+      }
+      const json = await parseStringPromise(XMLdata);
+      let jsonListing: ListingDetail = json.Listing;
+      // get date from API
+      let dateCreated = new Date(jsonListing.CreateDateTime![0]);
+
+      console.log("dateCreated is: ", dateCreated);
+
+      let webflowListing = await getWebflowItemByListingNumber(
+        listingNumberToUpdate,
+        env,
+        OFFSET
+      );
+
+      let webflowItemId = webflowListing._id;
+
+      let webflowPatchResponse = await patchWebflowItemField(
+        env,
+        webflowItemId,
+        "date-created",
+        dateCreated
+      );
+
+      return new Response(JSON.stringify(webflowPatchResponse));
     } else if (url.pathname === "/getListingNumbersWithCorruptGallery") {
       let listingNumbers: string[] = await getListingNumbersFromWebflow(
         env,
